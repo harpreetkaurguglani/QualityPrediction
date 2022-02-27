@@ -1,0 +1,355 @@
+---
+title: "industrypredictive"
+author: "Harpreet Kaur"
+date: "30/12/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#read data
+data=read.csv("C:/Yashi/UBC MDS/uk/PROJECT/AAL_A1_task.csv")
+
+```
+
+Changing the data type of the response variable.
+
+```{r}
+(sum(data$g4_var_2=="0"))
+data$g4_var_2<-as.integer(data$g4_var_2)
+```
+```{r}
+#replacing 'NULL' with the mean
+
+data$g4_var_2<-ifelse(is.na(data$g4_var_2),mean(data$g4_var_2,na.rm=TRUE),data$g4_var_2)
+```
+
+Changing the data type of the first variable to date and time
+```{r}
+names(data)[names(data)=="ï..datetime"]<-"datetime"
+```
+
+```{r}
+library(lubridate)
+data$datetime<-dmy_hms(data$datetime)
+```
+
+
+```{r}
+str(data)
+```
+
+```{r}
+c <- t(data$datetime)
+ c <- as.vector(c)
+ my <- ts(c, frequency = 4, start=c(2021,1))
+ plot.ts(my)
+ 
+```
+
+Removing the time variable in order to perform Quality variable analysis which is independent of time in this case.
+```{r}
+data2<-data[,-1]
+```
+
+Looking at the summary of NAs in each columns of the data.
+```{r}
+colSums(is.na(data2))
+```
+
+
+```{r}
+hist(data2$g4_var_2)
+```
+
+
+```{r}
+plot(data2$g4_var_2)
+mean(data2$g4_var_2)
+median((data2$g4_var_2))
+```
+
+Checking for the distribution of the response variable.The distribution of the data2$g4_var_2 variable is normally distributed.
+
+```{r}
+data3=data2[,-(15:36)]
+```
+
+```{r}
+#Boxplot to identify the outliers
+boxplot(data3)
+```
+
+There are a lot outliers present in the plot above.We need to replace these values with the IQR values, we cannot remove these values as they will affect our inference from the model that we might build.
+
+We will define a function which will help us replace these with the help of the Interquartile Range.
+
+### Handling Outliers 
+
+##### Quantile based flooring and capping method
+
+```{r}
+
+capOutlier <- function(x){
+  qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+  caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+  H <- 1.5 * IQR(x, na.rm = T)
+  x[x < (qnt[1] - H)] <- caps[1]
+  x[x > (qnt[2] + H)] <- caps[2]
+  return(x)
+}
+
+
+for (i in names(data3)){
+  data3[i]=capOutlier(as.numeric(unlist(data3[i])))
+  
+}
+```
+
+
+```{r}
+
+library(corrplot)
+corrplot(cor(data3), method = 'number',is.corr = FALSE)
+```
+
+
+Variable g3_var_3 is not linearly independent from the other variable.The column has only one value in the column for all the rows.
+
+```{r}
+train_ind = sample.int(n=nrow(data3), size=floor(0.8*nrow(data3)), replace=F)
+train = data3[train_ind,]
+test = data3[-train_ind,]
+```
+
+## Ordinary Linear Regression
+
+
+```{r}
+model1=lm(g4_var_2~g1_var_1+g1_var_2+g1_var_3+g2_var_1+g2_var_2+g2_var_3+g2_var_4+g3_var_1+g3_var_2+g3_var_4+g3_var_5+g4_var_1,data=train)
+```
+
+```{r}
+summary(model1)
+```
+
+```{r}
+plot(model1)
+hist(model1$residuals)
+```
+
+
+The residuals are normally distributed with mean 0 and constant variance. These are independent as can be seen from the histogram.
+
+### MSE 
+
+```{r}
+library(caret)
+```
+
+```{r}
+predict_lm=predict(model1,test)
+mse=mean((test$g4_var_2-predict_lm)^2)
+R2=R2(test$g4_var_2,predict_lm)
+mse
+R2
+#Accuracy
+cor(test$g4_var_2,predict_lm)
+```
+The MSE is very minimal from the above model and the model can be given the consideration.
+
+The predicted and the actual values are 61% of proportion of variation in the outcome that is explained by the predictor variables.
+
+## Ordinal Linear Regression
+
+```{r}
+library(MASS)
+polrFit<- polr(g4_var_2 ~ .-g3_var_3-g2_var_1-g3_var_4, method="logistic", data=train,Hess = TRUE)
+summary(polrFit)
+(ctable <- coef(summary(polrFit)))
+pval <- pnorm(abs(ctable[,"t value"]),lower.tail = FALSE)*2
+(ctable<-cbind(ctable,"p value"=pval))
+#print(pred,digits=3)
+```
+
+
+```{r}
+#Training Data
+#confusion matrix
+pred<-predict(polrFit,train)
+tab<-table(pred,train$g4_var_2)
+tab
+#misclassification rate
+1-sum(diag(tab))/sum(tab)
+```
+
+```{r}
+#Test Data
+#confusion matrix
+pred1<-predict(polrFit,test)
+tab1<-table(pred1,test$g4_var_2)
+tab1
+#misclassification rate
+1-sum(diag(tab1))/sum(tab1)
+```
+
+
+## Ordinary Random Forest
+
+```{r}
+library(randomForest)
+rm1=randomForest(as.factor(g4_var_2)~.,data=train,ntree=500)
+```
+
+```{r}
+rm1_test=randomForest(as.factor(g4_var_2)~.,data=test,ntree=500)
+rm1_test
+```
+
+```{r}
+mtry <- tuneRF(data3[-14],as.factor(data3$g4_var_2), ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(best.m)
+```
+
+
+```{r}
+varImpPlot(rm1)
+```
+
+Improving the randomforest model.
+
+```{r}
+set.seed(71)
+rf2 <-randomForest(as.factor(g4_var_2)~.,data=train,mtry=best.m,importance=TRUE,ntree=500)
+print(rf2)
+#Evaluate variable importance
+#importance(rf2)
+varImpPlot(rf2)
+```
+
+```{r}
+rf2_test <-randomForest(as.factor(g4_var_2)~.,data=test,mtry=best.m,importance=TRUE,ntree=500)
+
+rf2_test
+```
+
+
+
+From the above plot we can conclude that all the variables are significant except the variable g3_var_3.
+
+## Ordinal Random Forest
+
+```{r}
+model_rf<-train(g4_var_2 ~ .-g3_var_3-g2_var_1-g3_var_4, data=train,method="ordinalRF")
+```
+
+
+## Ordinary CVV
+
+```{r}
+library(ISLR)
+library(tree)
+set.seed(123)
+treem1 <- tree(g4_var_2~., data=train)
+summary(treem1)
+plot(treem1)
+text(treem1, pretty = 0)
+title(main = "Unpruned Regression Tree")
+```
+
+```{r}
+treem1_cv=cv.tree(treem1)
+plot(treem1_cv)
+```
+
+The tree size of 8 has lowest deviance, our original tree has 8nodes only. Therefore, there is no need to prune the tree.
+
+```{r}
+predict_cv=predict(treem1,test)
+mse=mean((test$g4_var_2-predict_cv)^2)
+mse
+rmse=sqrt(mse)
+rmse
+```
+
+
+
+## Ordinary CART
+```{r}
+library(rpart)
+set.seed(123)
+cartm1 <- rpart(g4_var_2~., data=train)
+plotcp(cartm1)
+```
+```{r}
+# find best value of cp
+min_cp = cartm1$cptable[which.min(cartm1$cptable[,"xerror"]),"CP"]
+min_cp
+```
+
+
+```{r}
+# prune tree using best cp
+seat_rpart_prune = prune(cartm1, cp = min_cp)
+
+# nicer plots
+library(rpart.plot)
+prp(seat_rpart_prune)
+```
+
+### MSE
+
+```{r}
+predict_crtree=predict(seat_rpart_prune,test)
+mse=mean((test$g4_var_2 -predict_crtree)^2)
+mse
+```
+
+
+```{r}
+rpart.plot(seat_rpart_prune)
+```
+## Ordinal Classification tree
+
+```{r}
+model_cart<-train(g4_var_2 ~ .-g3_var_3-g2_var_1-g3_var_4, data=train,method="rpartScore")
+model_cart
+```
+
+
+
+## Correlation with the quality variables
+
+This is in order to test the quality of the final product with standards defined in the stage 4 by testing the quality at that stage much before when the final product is delivered in the market.
+
+```{r}
+#g6_var_2
+
+cor(data2$g4_var_2,data2$g6_var_2)
+```
+There exist a negative correlation between the variables.
+
+```{r}
+#g6_var_3
+
+cor(data2$g4_var_2,data2$g6_var_3)
+```
+
+```{r}
+#g6_var_4
+
+cor(data2$g4_var_2,data2$g6_var_4)
+```
+
+
+
+### Conclusion
+
+In conclusion, the choose of model depends on the object using which the model is created. We know that our target is to predict the quality variable relation with the other independent variable which can be best illustrated with the inferential purpose from the linear model, however, if prediction is the goal then random forest serves has the best approach with high accuracy. 
